@@ -1,71 +1,110 @@
+require("dotenv").config();
 const express = require("express");
-let morgan = require('morgan');
+let morgan = require("morgan");
 const app = express();
-const cors = require('cors');
+const cors = require("cors");
+const Contact = require("./models/contact");
 
-let people = [
-  { id: "1", name: "Arto Hellas", number: "040-123456" },
-  { id: "2", name: "Ada Lovelace", number: "39-44-5323523" },
-  { id: "3", name: "Dan Abramov", number: "12-43-234345" },
-  { id: "4", name: "Mary Poppendieck", number: "39-23-6423122" },
-  { id: "5", name: "Something", number: "123456789" },
-];
-
-app.use(express.static('dist'));
+// Middlewares
+app.use(express.static("dist"));
 app.use(express.json());
 app.use(cors());
-
-morgan.token('type', function (req, res) { return JSON.stringify(req.body) });
-app.use(morgan(':method :url :status :res[content-length] - :response-time ms :type'));
+morgan.token("type", function (req, res) {
+  return JSON.stringify(req.body);
+});
+app.use(
+  morgan(":method :url :status :res[content-length] - :response-time ms :type")
+);
 
 // GET all people
 app.get("/people", (req, res) => {
-  res.json(people);
+  Contact.find({}).then((result) => {
+    res.json(result);
+  });
 });
 
-// POST new person
-app.post("/people", (request, response) => {
-  const body = request.body;
-  const newId = Math.floor(Math.random() * 1000);
-
-  if (!body.name || !body.number) {
-    return response.status(400).json({ error: "content missing" });
-  }
-
-  if (people.find((person) => person.name === body.name)) {
-    return response.status(400).json({ error: "name must be unique" });
-  }
-
-  const person = request.body;
-  person.id = String(newId);
-  people = people.concat(person);
-
-  response.json(person);
+app.get("/people/:id", (request, response, next) => {
+  Contact.findById(request.params.id)
+    .then((contact) => {
+      if (contact) {
+        response.json(contact);
+      } else {
+        response.status(404).end();
+      }
+    })
+    .catch((error) => next(error));
 });
 
 // PUT to update person
-app.put("/people/:id", (request, response) => {
-  const id = request.params.id;
-  const personIndex = people.findIndex((person) => person.id === id);
+app.put("/people/:id", (request, response, next) => {
+  const { name, number } = request.body
 
-  if (personIndex !== -1) {
-    const updatedPerson = { ...people[personIndex], ...request.body };
-    people[personIndex] = updatedPerson;
-    response.json(updatedPerson);
-  } else {
-    response.status(404).json({ error: "person not found" });
+  Contact.findByIdAndUpdate(request.params.id, { name, number },
+    { new: true, runValidators: true, context: 'query' })
+    .then((updatedContact) => {
+      response.json(updatedContact);
+    })
+    .catch((error) => next(error)); // pass error to error handler
+});
+
+// POST new person
+app.post("/people", (request, response, next) => {
+  // added next
+  const body = request.body;
+
+  if (body.name === undefined || body.number === undefined) {
+    console.log("Content missing");
+
+    return response.status(400).json({ error: "content missing" });
   }
+
+  Contact.find({ name: body.name }).then((result) => {
+    if (result.length > 0) {
+      console.log("found duplicate");
+      return response.status(400).send({ error: "Contact already exists" });
+    }
+
+    const contact = new Contact({
+      name: body.name,
+      number: body.number,
+    });
+
+    contact
+      .save()
+      .then((savedContact) => {
+        response.json(savedContact);
+      })
+      .catch((error) => next(error)); // pass error to error handler
+  });
 });
 
 // DELETE person
-app.delete("/people/:id", (request, response) => {
-  const id = request.params.id;
-  people = people.filter((person) => person.id !== id);
-  response.status(204).end();
+app.delete("/people/:id", (request, response, next) => {
+  Contact.findByIdAndDelete(request.params.id)
+    .then((result) => {
+      response.status(204).end();
+    })
+    .catch((error) => next(error));
 });
 
+// Error Handling
+const errorHandler = (error, request, response, next) => {
+  console.error(error.message);
+
+  if (error.name === "CastError") {
+    return response.status(400).send({ error: "malformatted id" });
+  } else if (error.name === "ValidationError") {
+    return response.status(400).json({ error: error.message });
+  }
+
+  next(error);
+};
+
+// this has to be the last loaded middleware, also all the routes should be registered before this!
+app.use(errorHandler);
+
 // Server listening
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
